@@ -1,0 +1,316 @@
+//include libraries
+#include <LiquidCrystal.h>                   //bibliothek für LCD Display
+LiquidCrystal lcd(7, 8, 9, 10, 11, 12);      //define pins for LCD
+
+#include "DHT.h"                             //DHT bibliothek hinzufügen
+
+//define PINs
+
+#define SMoist_sensorPin A4                  //define pin for sensor readout
+#define SM_PUMP_RELAY 4                      //definiert PIN4 als SM_PUMP_RELAY, hierüber wird das Relay angesteuert
+
+#define HZG_sensorPin A2                     //define pin for sensor readout
+
+#define DHTPIN A5            //Der Sensor wird an PIN A5 angeschlossen
+
+#define PUMP_OUT_RELAY 2     //definiert PIN5 als PUMP_OUT_RELAY, hierüber wird das Relay für die Abluft-Pumpe angesteuert
+#define PUMP_CIR_RELAY 3     //definiert PIN2 als PUMP_CIR_RELAY, hierüber wird das Relay für die Zirkulations-Pumpe angesteuert
+
+#define HEAT_RELAY 5         //definiert PIN3 als HEAT_RELAY, hierüber wird das Relay für die Heizplatten angesteuert
+
+#define DHTTYPE DHT11        // Es handelt sich um den DHT11 Sensor
+
+#define H2Olvl A3            //define pin for sensor readout
+
+#define KLICK_sensorPin 6    //define pin for sensor readout
+
+//define thresholds
+#define soil_dry 800                  //wert aufwärts = trocken --> turn on pump
+#define soil_perfect 600              //wert aufwärts = perfekt --> turn off pump
+#define soil_wet 400                  //wert aufwärts = feucht --> ????
+
+#define wasserstand_hoch 300          //wenn sensorwert über 500 bzw wasserstand_hoch ist, schalte niemals die Pumpe an!
+
+
+#define TMAX 24                       //es kann nur passiv gekühlt werden, indem Luft abgepumpt wird
+#define TMIN 23
+
+#define RHMAX 90 
+// #define RHMIN 50 kann aktuell noch nicht geändert werden, da wir die RH nicht aktiv erhöhen können
+
+#define HZGMAX 45             //wenn Heizplatten diese Temperatur erreichen müssen sie abkühlen auf HZGOK bevor sie wieder angeschalten werden können
+#define HZGRDY 35             //siehe oben
+
+//define library specfics
+DHT dht(DHTPIN, DHTTYPE);     //Der Sensor wird ab jetzt mit „dth“ angesprochen
+
+//definiere Zeitvariablen
+unsigned long previousMillis_SM_measure = 0;         //setzt previousMillis soil moisture measure auf 0
+unsigned long interval_SM_measure = 2000;            //bestimmt intervall für soil moisture measurement auf 2 Sekunden
+
+unsigned long previousMillis_H2O_measure = 0;        //setzt previousMillis soil moisture measure auf 0
+unsigned long interval_H2O_measure = 1000;           //bestimmt intervall für soil moisture measurement auf 1 Sekunde
+
+
+unsigned long previousMillis_DHT_measure = 0;         //setzt previousMillis DHT measure auf 0
+unsigned long interval_DHT_measure = 2000;            //bestimmt intervall für DHT measurement auf 2 Sekunden  
+
+unsigned long previousMillis_KLICK = 0;               //setzt previousMillis_KLICK auf 0
+const long interval_KLICK = 500;                      //bestimmt intervall in ms für variable interval_KLICK
+
+unsigned long previousMillis_LCD = 0;                 //setzt previousMillis_LCD auf 0
+const long interval_LCD = 500;                        //bestimmt intervall in ms für variable interval_LCD
+
+unsigned long previousMillis_SerMon = 0;
+const long interval_SerMon = 1000;
+
+//definiere Variablen
+int SM_PUMP = 0;                                     //setzt variable soil moisture pump = 0
+int EMERGENCY_PUMP = 0;                              //setzt variable emergency pump = 0
+
+int PUMP_OUT_HUM = 0;
+int PUMP_OUT_TEM = 0;
+int PUMP_CIR = 0;
+
+int HEAT_UP = 0;
+int HZG_NA = 0;
+      
+
+int KLICKnr = 1;                              //KLICKnr wird gleich 1 gesetzt
+
+float Air_moist = 0;
+float Air_temp = 0;
+float valSM =0;
+float valHZG = 0;
+float H2O = 0;
+
+
+
+void setup() {
+  lcd.begin(16, 2);                           //lcd monitor starten
+  dht.begin();                                //DHT11 Sensor starten
+  Serial.begin(9600);                         //serieller Monitor starten
+
+  pinMode(SM_PUMP_RELAY, OUTPUT);                     //SM_PUMP_RELAY ist ein OUTPUT, PIN4 gibt somit strom oder nicht strom
+  digitalWrite(SM_PUMP_RELAY, HIGH);                  //zu beginn ist PIN4 aus
+
+  pinMode(PUMP_OUT_RELAY, OUTPUT);                    //PUMP_OUT_RELAY ist ein OUTPUT, PIN5 gibt somit strom oder nicht strom
+  digitalWrite(PUMP_OUT_RELAY, HIGH);                 //zu beginn ist PIN5 aus
+
+  pinMode(PUMP_CIR_RELAY, OUTPUT);                    //PUMP_CIR_RELAY ist ein OUTPUT, PIN2 gibt somit strom oder nicht strom
+  digitalWrite(PUMP_CIR_RELAY, HIGH);                 //zu beginn ist PIN2 aus
+
+  pinMode(HEAT_RELAY, OUTPUT);                        //HEAT_RELAY ist ein OUTPUT, PIN3 gibt somit strom oder nicht strom
+  digitalWrite(HEAT_RELAY, HIGH);                     //zu beginn ist PIN3 aus
+
+}
+
+
+
+void loop() {
+
+  valSM = analogRead(SMoist_sensorPin);  //Sensorwert lesen, Wert für Bodenfeuchte
+  H2O = analogRead(H2Olvl);              //Sensorwert lesen, Wert für Pumpe-Notaus
+
+  //checke Temperatur der Heizplatten, permanent
+  
+  float valHZG = analogRead(HZG_sensorPin);
+  double tempK_NA = log(10000.0 * ((1024.0 / valHZG - 1)));
+  tempK_NA = 1 / (0.001129148 + (0.000234125 + (0.0000000876741 * tempK_NA * tempK_NA )) * tempK_NA );       //  Temperatur in Kelvin
+  float tempC_NA = tempK_NA - 273.15;                                                                        // Konvertiere Kelvin zu °C
+
+  //wenn Heizplatten über HZGMAX°C werden, schreibe Variable HZG_NA = 1 und HZG_RDY = 0
+  if (tempC_NA > HZGMAX) {
+    HZG_NA = 1;
+    }
+
+   
+  if (tempC_NA < HZGRDY) {
+    HZG_NA = 0;
+    }
+
+  
+  //checke erstens temperatur und RH, tue dies im Intervall "interval_DHT_measure" 
+  unsigned long currentMillis_DHT_measure = millis();                                      //currentMillis_DHT_measure wird = millis gesetzt
+  if (currentMillis_DHT_measure - previousMillis_DHT_measure >= interval_DHT_measure){     //ist mehr Zeit vergangen als interval_DHT_measure angibt?
+    previousMillis_DHT_measure = currentMillis_DHT_measure;                                //wenn ja, wird...
+    Air_moist = dht.readHumidity();                                                        //...die Luftfeuchtigkeit ausgelesen und unter „Luftfeutchtigkeit“ gespeichert
+    Air_temp = dht.readTemperature();                                                      //...die Temperatur ausgelesen und unter „Temperatur“ gespeichert  
+  
+    //checke nun (alle "interval_DHT_measure" Zeiteinheiten) die Temperatur und Luftfeuchte mit den Grenzwerten ab und schreibe Variablen entsprechend, die die Aktionen definieren
+    if (Air_moist > RHMAX) {                //Sensorwert zur Luftfeuchtigkeit wird mit Grenzwert abgeglichen,
+      PUMP_OUT_HUM = 1;                     //wenn groesser als grenzwert, PUMP_OUT_HUM wird = 1 gesetzt
+    }
+    if (Air_moist <= RHMAX - 5) {           //wenn Luftfeuchtigkeit 5 prozent unter RHMAX liegt geht Pumpe aus
+      PUMP_OUT_HUM = 0;
+    }
+    
+        
+    if (Air_temp <= TMIN) {
+      HEAT_UP = 1;                         //wenn Lufttemp kleiner als TMIN, wird HEAT_UP auf 1 gesetzt, Heizung geht an
+    } else {                               //wenn Lufttemp nicht kleiner als TMIN ist,
+      if (Air_temp >= TMAX) {              //wird getestet ob Lufttemp >= TMAX ist. Wenn ja, schalte Heizung aus
+        HEAT_UP = 0;
+      }
+    } 
+
+    if (Air_temp > TMAX + 0.5) {           //wenn Lufttemperatur höher als TMAX + 0.5, wird PUMP_OUT_TEM gleich 1 gesetzt, sonst auf 0
+        PUMP_OUT_TEM = 1;
+      } else {
+          PUMP_OUT_TEM = 0;
+          }
+  }
+  
+  
+  //checke permanent die Variablen die soeben definiert wurden und schalte dadurch die Luftpumpen und Heizung
+  if (PUMP_OUT_HUM == 1) {                   //wenn Luftfeuchtigkeit zu hoch ist, geht Abluftpumpe an
+    digitalWrite(PUMP_OUT_RELAY, LOW);
+  }
+  if (PUMP_OUT_TEM == 1) {                   //wenn Temperatur zu hoch ist, geht Abluftpumpe und Zirkulationspumpe an
+    digitalWrite(PUMP_OUT_RELAY, LOW);
+    digitalWrite(PUMP_CIR_RELAY, LOW);
+  }
+  if (HEAT_UP == 1 && HZG_NA == 0) {         //wenn temperatur zu niedrig, Heizung und Zirkulationspumpe an
+    digitalWrite(PUMP_CIR_RELAY, LOW);
+    digitalWrite(HEAT_RELAY, LOW);
+  }  else {
+      digitalWrite(HEAT_RELAY, HIGH);         //wenn temperatur über TMIN, Heizung aus
+  }
+  
+  if (PUMP_OUT_HUM == 0 && PUMP_OUT_TEM == 0 && HEAT_UP == 0) {                 //wenn die Luftfeuchte nicht zu hoch ist, die LTemp nicht zu hoch und nicht zu niedrig, kann Heizung und Luftpumpen ausgeschalten werden.
+    digitalWrite(PUMP_OUT_RELAY, HIGH);
+    digitalWrite(PUMP_CIR_RELAY, HIGH);
+    digitalWrite(HEAT_RELAY, HIGH);
+  }
+  if (PUMP_OUT_HUM == 0 && PUMP_OUT_TEM == 0 && HEAT_UP == 1 && HZG_NA == 0) {  //wenn Lfeucht okay, aber temp zu niedrig, kann abluftpumpe aus gehen, aber Zikrul und Heizung an
+    digitalWrite(PUMP_OUT_RELAY, HIGH);
+    digitalWrite(PUMP_CIR_RELAY, LOW);
+    digitalWrite(HEAT_RELAY, LOW);
+  }
+  if (HZG_NA == 1) {
+    digitalWrite(HEAT_RELAY, HIGH);
+  }
+  //checke 1. den Wasserstand und definiere Notaus Output
+  unsigned long currentMillis_H2O_measure = millis();                                      //currentMillis_H2O_measure wird = millis gesetzt
+  if (currentMillis_H2O_measure - previousMillis_H2O_measure >= interval_H2O_measure){     //ist mehr Zeit vergangen als interval_H2O_measure angibt?
+    previousMillis_H2O_measure = currentMillis_H2O_measure;                                //wenn ja, setze previousMillis_H2O_measure = currentMillis_H2O_measure
+    float H2O = analogRead(H2Olvl);                                                        //lies analogwert des sensors aus
+    if (H2O >= wasserstand_hoch) {                                                         //wenn variable H2O >= wasserstand_hoch ist ...
+     EMERGENCY_PUMP = 1;                                                                   //... dann setze variable EMERGENCY_PUMP auf 1
+    } else {
+      EMERGENCY_PUMP = 0;                                                                  //wenn H2O < wasserstand_hoch ist, setzt EMERGENCY_PUMP auf 0
+    }
+  }
+
+
+  //checke 2. die Bodenfeuchtigkeit und definiere Pumpen-Status mit bedacht auf Notaus status
+  unsigned long currentMillis_SM_measure = millis();                                    //currentMillis_SM_measure wird = millis gesetzt
+  if (currentMillis_SM_measure - previousMillis_SM_measure >= interval_SM_measure){     //ist mehr Zeit vergangen als interval_SM_measure angibt?
+    previousMillis_SM_measure = currentMillis_SM_measure;                               //wenn ja, setze previousMillis_SM_measure = currentMillis_SM_measure und führe folgende Befehle aus
+    float valSM = analogRead(SMoist_sensorPin);                                         //Sensorwert lesen
+    if (valSM >= soil_dry) {                                                            //wenn valSM dry dann...
+    SM_PUMP = 1;                                                                        //...schreibe SM_PUMP auf 1 um
+  } else if (valSM < soil_dry && valSM >= soil_perfect) {
+    SM_PUMP = 0;
+  } else if (valSM < soil_perfect) {
+    SM_PUMP = 0;
+  }
+}
+
+ //werte SM_PUMP aus und entscheide ob Pumpe angeschalten wird oder nicht
+ if (SM_PUMP == 1 && EMERGENCY_PUMP == 0) {       //ist SM_PUMP gleich 1 und EMERGENCY_PUMP = 0?
+  digitalWrite(SM_PUMP_RELAY, LOW);               //wenn ja, gib strom auf PIN4
+  }
+  else {                                          //wenn nein, schalte PIN4 aus
+    digitalWrite(SM_PUMP_RELAY, HIGH);             
+    }
+
+
+  //LCD-KLICKER
+  unsigned long currentMillis_KLICK = millis();                         //currentMillisPrint ist die Zahl, die von millis ausgegben wird, unsigned heißt ohne vorzeichen
+  if (currentMillis_KLICK - previousMillis_KLICK >= interval_KLICK){    //wenn ausgabe - variable größer ist als intervall, wird previousMillis neuer Wert zugeordnet, if funktion wird ausgeführt
+    previousMillis_KLICK = currentMillis_KLICK;                         //previousMillis wird = currentMillis gesetzt
+    
+  //ausserdem wird KLICK-Zaehler berechnet:
+  float valKLICK = digitalRead(KLICK_sensorPin);
+
+       if (valKLICK == 1) {                //wenn Variable valKLICK 1 ist (wenn knopf gedrückt ist),
+      KLICKnr++;                           //dann wird Variable KLICKnr +1 gerechnet.
+    } 
+     if (KLICKnr > 5) {                    //wenn Variable KLICKnr größer als 3 wird,
+      KLICKnr = 1;                         //dann wird Variable KLICKnr wieder auf 1 gesetzt.
+    }
+  } //KLICK berechnung fertig
+
+  //LCD-Anzeige je nach KLICKnr ausgeben:
+  unsigned long currentMillis_LCD = millis();                             //currentMillis ist die Zahl, die von millis ausgegben wird, unsigned heißt ohne vorzeichen
+    if (currentMillis_LCD - previousMillis_LCD >= interval_LCD){          //wenn ausgabe - variable größer ist als intervall, wird previousMillis neuer Wert zugeordnet, if funktion wird ausgeführt
+      previousMillis_LCD = currentMillis_LCD;                             //previousMillis wird = currentMillis gesetzt
+      if (KLICKnr == 2) {
+        // Bodenfeuchtigkeit Sensorwert auf LCD anzeigen
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("moisture AU:   ");      //Display moisture in AU
+        lcd.setCursor(0, 1);               //write in line 0 at position 12 (hinter moisture AU)
+        lcd.print(valSM);                  //show value from sensor;
+      }
+      if (KLICKnr == 3) {
+        //Heizung Sensorwert auf LCD anzeigen
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Heizung C:   ");         //Display moisture in AU
+        lcd.setCursor(0, 1);                //write in line 0 at position 12 (hinter moisture AU)
+        lcd.print(tempC_NA);                //show value from sensor;
+      }
+      if (KLICKnr == 4) {
+        //Air_temp und Air_moist auf LCD anzeigen
+        lcd.clear();
+        lcd.setCursor(0, 0);                //write in line 0 at position 0
+        lcd.print("T  =       C    ");      //Schreibe T = in LCD
+        lcd.setCursor(5, 0);                //write in line 0 at position 4
+        lcd.print(Air_temp);                //show value from sensor;
+    
+        lcd.setCursor(0, 1);                //write in line 1 at position 0
+        lcd.print("RH =       %     ");     //Schreibe T = in LCD
+        lcd.setCursor(5, 1);                //write in line 1 at position 6
+        lcd.print(Air_moist);               //show value from sensor;
+      }
+      if (KLICKnr == 5) {
+        //H2O wert auf LCD anzeigen
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Ueberlauf?   ");         //Display moisture in AU
+        lcd.setCursor(0, 1);                //write in line 0 at position 12 (hinter moisture AU)
+        lcd.print(H2O);                     //show value from sensor;
+      }
+      if (KLICKnr == 1) {
+        // Alle Sensorwerte auf LCD anzeigen, ohne Überlauf
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("M:   ");      // Display moisture in AU
+        lcd.setCursor(2, 0);               //write in line 0 at position 12 (hinter moisture AU)
+        lcd.print(valSM);                  //show value from sensor;
+        lcd.setCursor(9, 0);
+        lcd.print("H:   ");        // Display moisture in AU
+        lcd.setCursor(12, 0);                //write in line 0 at position 12 (hinter moisture AU)
+        lcd.print(tempC_NA);                  //show value from sensor;
+        lcd.setCursor(0, 1);                //write in line 0 at position 0
+        lcd.print("T:    ");      //Schreibe T = in LCD
+        lcd.setCursor(2, 1);                //write in line 0 at position 4
+        lcd.print(Air_temp);                //show value from sensor;
+        lcd.setCursor(8, 1);                //write in line 1 at position 0
+        lcd.print("RH:   ");     //Schreibe T = in LCD
+        lcd.setCursor(11, 1);                //write in line 1 at position 6
+        lcd.print(Air_moist);               //show value from sensor;
+      }
+  }
+  unsigned long currentMillis_SerMon = millis();                             //im seriellen Monitor kann der Status für die Variablen "HEAT_UP" und "Hzg_NA" angezeigt werden.          
+  if (currentMillis_SerMon - previousMillis_SerMon >= interval_SerMon){      //dies wurde zum überprüen des Codes verwendet. Der Code kann hier einfach um die übrigen Variablen ergänzt werden, sollte dies gewünscht sein.
+    previousMillis_SerMon = currentMillis_SerMon;                                 
+Serial.print("HEAT_UP:");
+Serial.println(HEAT_UP);
+Serial.print("HZG_NA:");
+Serial.println(HZG_NA);
+Serial.println("_____________");
+  }
+}
